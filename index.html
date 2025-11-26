@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webcam Fruit Slicer - P1 vs P2</title>
+    <!-- 引入 MediaPipe -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #1e1e1e;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: white;
+            user-select: none;
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #input_video { display: none; }
+
+        #output_canvas {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            transform: scaleX(-1); /* 镜像翻转 */
+        }
+
+        #ui_layer {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .hud {
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+        }
+
+        .score-container {
+            display: flex;
+            gap: 40px;
+            background: rgba(0,0,0,0.3);
+            padding: 10px 20px;
+            border-radius: 15px;
+        }
+
+        /* 玩家一紫色，玩家二蓝色 */
+        .left-score { color: #ff00ff; }
+        .right-score { color: #00ffff; }
+        
+        .timer-box { color: #facc15; font-size: 32px; }
+
+        #center_msg {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            pointer-events: auto;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 40px;
+            border-radius: 20px;
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255,255,255,0.1);
+            min-width: 400px;
+        }
+
+        h1 {
+            font-size: 48px;
+            margin-bottom: 10px;
+            color: #ffcc00;
+        }
+
+        .special-desc {
+            font-size: 14px;
+            color: #aaa;
+            margin-top: 5px;
+            background: rgba(0,0,0,0.5);
+            padding: 5px 10px;
+            border-radius: 5px;
+            display: inline-block;
+        }
+
+        button {
+            background: linear-gradient(45deg, #ff416c, #ff4b2b);
+            border: none;
+            padding: 15px 40px;
+            color: white;
+            font-size: 24px;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(255, 75, 43, 0.4);
+            transition: transform 0.1s;
+            margin-top: 20px;
+        }
+
+        button:active { transform: scale(0.95); }
+        button:disabled { background: #555; cursor: not-allowed; box-shadow: none; }
+
+        #loading {
+            font-size: 18px;
+            color: #aaa;
+            margin-top: 15px;
+            display: none;
+        }
+
+        .urgent { color: #ef4444; animation: pulse 0.5s infinite; }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+        
+        /* 特效层 (覆盖在 Canvas 上) */
+        #fx_overlay {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none;
+            mix-blend-mode: screen; /* 叠加模式 */
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        /* 语言切换按钮 */
+        #lang_btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            z-index: 100;
+            font-weight: bold;
+            font-size: 14px;
+            backdrop-filter: blur(5px);
+            transition: all 0.3s;
+            pointer-events: auto;
+            margin-top: 0;
+            box-shadow: none;
+        }
+        #lang_btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <video id="input_video"></video>
+    <canvas id="output_canvas"></canvas>
+    <div id="fx_overlay"></div>
+
+    <!-- 语言切换按钮 -->
+    <button id="lang_btn" onclick="toggleLanguage()">Switch to 中文</button>
+
+    <div id="ui_layer">
+        <div class="hud">
+            <div class="score-container">
+                <div class="left-score"><span id="lbl_left">Player 1</span>: <span id="score_left">0</span></div>
+                <div class="right-score"><span id="lbl_right">Player 2</span>: <span id="score_right">0</span></div>
+            </div>
+            <div class="timer-box"><span id="time">60</span>s</div>
+        </div>
+
+        <div id="center_msg">
+            <h1 id="txt_title">🖐️ Special Fruit Slicer</h1>
+            <p id="txt_subtitle" style="margin-bottom: 5px; font-size: 18px; color: #fff;">New Special Fruits!</p>
+            <div>
+                <div class="special-desc" id="desc_pineapple">🍍 Pineapple = Frenzy (No Bombs!)</div>
+                <div class="special-desc" id="desc_blueberry">🫐 Blueberry = Time Freeze</div>
+            </div>
+            <p id="txt_warn" style="margin-top: 15px; font-size: 14px; color: #ff4444; font-weight: bold;">⚠️ Avoid Glowing Bombs</p>
+            <button id="start_btn" onclick="initGame()">Start Game</button>
+            <div id="loading">Loading assets...</div>
+            <div id="final_score" style="display:none; margin-top: 20px; font-size: 28px; line-height: 1.6;"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- 语言配置 ---
+    let currentLang = 'en'; // 默认英语
+    
+    const TEXTS = {
+        en: {
+            title: "🖐️ Special Fruit Slicer",
+            subtitle: "New Special Fruits!",
+            desc_pineapple: "🍍 Pineapple = Frenzy (No Bombs!)",
+            desc_blueberry: "🫐 Blueberry = Time Freeze",
+            warn: "⚠️ Avoid Glowing Bombs",
+            btn_start: "Start Game",
+            btn_retry: "Play Again",
+            btn_lang: "Switch to 中文",
+            lbl_left: "Player 1",  // Update
+            lbl_right: "Player 2", // Update
+            loading_res: "Loading assets...",
+            loading_cam: "Starting camera (Allow permission)...",
+            ready: "Ready!",
+            time_up: "Time's Up!",
+            total: "Total",
+            fx_frenzy: "FRENZY!",
+            fx_freeze: "FREEZE!"
+        },
+        zh: {
+            title: "🖐️ 特效切水果",
+            subtitle: "新增特殊水果！",
+            desc_pineapple: "🍍 菠萝 = 狂热模式 (无炸弹!)",
+            desc_blueberry: "🫐 蓝莓 = 时间冻结",
+            warn: "⚠️ 躲避发光的炸弹",
+            btn_start: "开始游戏",
+            btn_retry: "再玩一次",
+            btn_lang: "Switch to English",
+            lbl_left: "玩家一",  // Update
+            lbl_right: "玩家二", // Update
+            loading_res: "正在加载资源...",
+            loading_cam: "正在启动摄像头 (请允许权限)...",
+            ready: "准备就绪！",
+            time_up: "时间到!",
+            total: "总分",
+            fx_frenzy: "狂热!",
+            fx_freeze: "冻结!"
+        }
+    };
+
+    function toggleLanguage() {
+        currentLang = currentLang === 'en' ? 'zh' : 'en';
+        updateUIText();
+    }
+
+    function updateUIText() {
+        const t = TEXTS[currentLang];
+        document.getElementById('txt_title').innerText = t.title;
+        document.getElementById('txt_subtitle').innerText = t.subtitle;
+        document.getElementById('desc_pineapple').innerText = t.desc_pineapple;
+        document.getElementById('desc_blueberry').innerText = t.desc_blueberry;
+        document.getElementById('txt_warn').innerText = t.warn;
+        document.getElementById('lang_btn').innerText = t.btn_lang;
+        document.getElementById('lbl_left').innerText = t.lbl_left;
+        document.getElementById('lbl_right').innerText = t.lbl_right;
+        
+        // 更新按钮文字
+        if (!isGameRunning) {
+            if (startBtn.disabled) {
+            } else {
+                if (finalScoreDisplay.style.display === 'block') {
+                    startBtn.innerText = t.btn_retry;
+                } else {
+                    startBtn.innerText = t.btn_start;
+                }
+            }
+        }
+        
+        // 更新结算界面
+        if (finalScoreDisplay.style.display === 'block') {
+            renderGameOverScreen();
+        }
+    }
+
+    // --- 游戏配置 ---
+    const GAME_DURATION = 60;
+    const BASE_SPAWN_RATE = 35; // 基础生成速率
+    const GRAVITY = 0.45; 
+    
+    // --- 资源配置 ---
+    const ASSETS = {
+        'apple': 'https://pngimg.com/uploads/apple/apple_PNG12405.png',
+        'banana': 'https://pngimg.com/uploads/banana/banana_PNG817.png',
+        'orange': 'https://pngimg.com/uploads/orange/orange_PNG780.png',
+        'watermelon': 'https://www.freepnglogos.com/uploads/watermelon-png/watermelon-fruit-transparent-png-image-11.png',
+        'grape': 'https://pngimg.com/uploads/grape/grape_PNG2985.png',
+        'lemon': 'https://pngimg.com/uploads/lemon/lemon_PNG25209.png',
+        'bomb': 'https://www.freepnglogos.com/uploads/bomb-png/bomb-png-transparent-image-pngpix-0.png',
+        // 特殊水果贴图
+        'pineapple': 'https://pngimg.com/uploads/pineapple/pineapple_PNG2755.png',
+        'blueberry': 'https://pngimg.com/uploads/blueberry/blueberry_PNG54.png'
+    };
+
+    const loadedImages = {};
+
+    // --- 全局变量 ---
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const uiScoreLeft = document.getElementById('score_left');
+    const uiScoreRight = document.getElementById('score_right');
+    const uiTime = document.getElementById('time');
+    const startBtn = document.getElementById('start_btn');
+    const loadingText = document.getElementById('loading');
+    const centerMsg = document.getElementById('center_msg');
+    const finalScoreDisplay = document.getElementById('final_score');
+    const fxOverlay = document.getElementById('fx_overlay');
+
+    let isGameRunning = false;
+    let scores = { 'Left': 0, 'Right': 0 };
+    let timeLeft = GAME_DURATION;
+    let gameLoopId;
+    let spawnTimer = 0;
+    let currentSpawnRate = BASE_SPAWN_RATE;
+    
+    // 特效状态变量
+    let shakeDuration = 0;
+    let flashDuration = 0;
+    let timeScale = 1.0; // 时间流逝速度 (1.0 = 正常, 0.2 = 慢动作)
+    let freezeTimer = 0; // 冰冻效果倒计时
+    let frenzyTimer = 0; // 狂热效果倒计时
+    
+    let fruits = [];
+    let particles = [];
+    let floatingTexts = []; 
+    
+    let handsData = {
+        'Left': { x: 0, y: 0, detected: false },
+        'Right': { x: 0, y: 0, detected: false }
+    };
+
+    let trails = {
+        'Left': [],
+        'Right': []
+    };
+
+    // --- MediaPipe 初始化 ---
+    let camera;
+    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+
+    hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+    });
+
+    hands.onResults(onResults);
+
+    function onResults(results) {
+        handsData['Left'].detected = false;
+        handsData['Right'].detected = false;
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                const landmarks = results.multiHandLandmarks[i];
+                let label = 'Right';
+                if (results.multiHandedness && results.multiHandedness[i]) {
+                    label = results.multiHandedness[i].label;
+                }
+                const indexFingerTip = landmarks[8];
+                
+                if (handsData[label]) {
+                    handsData[label].detected = true;
+                    handsData[label].x = indexFingerTip.x;
+                    handsData[label].y = indexFingerTip.y;
+                }
+            }
+        }
+    }
+
+    function preloadAssets(callback) {
+        let loadedCount = 0;
+        const total = Object.keys(ASSETS).length;
+        if (total === 0) { callback(); return; }
+
+        for (let key in ASSETS) {
+            const img = new Image();
+            img.src = ASSETS[key];
+            img.onload = () => {
+                loadedImages[key] = img;
+                loadedCount++;
+                if (loadedCount === total) callback();
+            };
+            img.onerror = () => {
+                console.warn(`Failed to load image for ${key}`);
+                loadedCount++; 
+                if (loadedCount === total) callback();
+            };
+        }
+    }
+
+    async function initGame() {
+        startBtn.disabled = true;
+        startBtn.innerText = TEXTS[currentLang].loading_res; 
+        loadingText.style.display = "block";
+        loadingText.innerText = TEXTS[currentLang].loading_res;
+
+        preloadAssets(async () => {
+            loadingText.innerText = TEXTS[currentLang].loading_cam;
+            try {
+                camera = new Camera(videoElement, {
+                    onFrame: async () => {
+                        await hands.send({image: videoElement});
+                    },
+                    width: 1280,
+                    height: 720
+                });
+                await camera.start();
+                
+                loadingText.innerText = TEXTS[currentLang].ready;
+                setTimeout(startGameLoop, 1000);
+            } catch (error) {
+                alert("Camera Error: " + error);
+                startBtn.disabled = false;
+                startBtn.innerText = TEXTS[currentLang].btn_retry;
+                loadingText.style.display = "none";
+            }
+        });
+    }
+
+    // --- 物品定义 ---
+    const FRUIT_TYPES = [
+        { name: 'watermelon', color: '#2ecc71', innerColor: '#ff6b6b', radiusMod: 1.8, points: 5, weight: 10 },
+        { name: 'banana',  color: '#f1c40f', innerColor: '#fff9c4', radiusMod: 1.5, points: 8, weight: 12 },
+        { name: 'apple',   color: '#e74c3c', innerColor: '#fef9e7', radiusMod: 1.1, points: 10, weight: 15 },
+        { name: 'orange',  color: '#e67e22', innerColor: '#ffe0b2', radiusMod: 1.1, points: 10, weight: 15 },
+        { name: 'lemon',   color: '#ffeaa7', innerColor: '#fffde7', radiusMod: 0.8, points: 15, weight: 12 },
+        { name: 'grape',   color: '#8e44ad', innerColor: '#d1c4e9', radiusMod: 0.6, points: 25, weight: 8 },
+        { name: 'bomb',    color: '#333333', innerColor: '#ff0000', radiusMod: 1.2, points: -50, isBomb: true, weight: 15 },
+        { name: 'pineapple', color: '#f39c12', innerColor: '#f1c40f', radiusMod: 1.4, points: 50, special: 'frenzy', weight: 4 }, 
+        { name: 'blueberry', color: '#2980b9', innerColor: '#a9cce3', radiusMod: 0.7, points: 50, special: 'freeze', weight: 4 } 
+    ];
+
+    class Fruit {
+        constructor(w, h) {
+            let candidates = FRUIT_TYPES;
+            
+            // 如果处于狂热模式 (frenzyTimer > 0)，过滤掉所有炸弹
+            if (frenzyTimer > 0) {
+                candidates = FRUIT_TYPES.filter(t => !t.isBomb);
+            }
+
+            const totalWeight = candidates.reduce((sum, item) => sum + item.weight, 0);
+            let random = Math.random() * totalWeight;
+            
+            this.type = candidates[0];
+
+            for (let type of candidates) {
+                if (random < type.weight) {
+                    this.type = type;
+                    break;
+                }
+                random -= type.weight;
+            }
+
+            this.baseRadius = 35; 
+            this.radius = this.baseRadius * this.type.radiusMod;
+            
+            this.x = Math.random() * (w - 100) + 50;
+            this.y = h + this.radius; 
+            
+            // 物理计算
+            const maxH = h * 0.1;
+            const minH = h * 0.45;
+            const targetY = Math.random() * (minH - maxH) + maxH;
+            
+            const dist = this.y - targetY;
+            this.vy = -Math.sqrt(2 * GRAVITY * dist);
+
+            const centerX = w / 2;
+            const dir = this.x < centerX ? 1 : -1;
+            this.vx = (Math.random() * 3 + 1) * dir;
+            
+            this.active = true;
+            this.isSliced = false;
+            this.rotation = Math.random() * Math.PI * 2;
+            this.rotSpeed = (Math.random() - 0.5) * 0.15;
+            this.slicedBy = null; 
+
+            this.pulse = 0; 
+
+            this.half1 = { x: 0, y: 0, vx: 0, vy: 0, rotation: 0, rotSpeed: 0 };
+            this.half2 = { x: 0, y: 0, vx: 0, vy: 0, rotation: 0, rotSpeed: 0 };
+            
+            this.image = loadedImages[this.type.name];
+        }
+
+        update(w, h) {
+            if (this.type.isBomb || this.type.special) {
+                this.pulse += 0.15;
+            }
+
+            const dt = timeScale; 
+
+            if (!this.isSliced) {
+                this.x += this.vx * dt;
+                this.y += this.vy * dt;
+                this.vy += GRAVITY * dt;
+                this.rotation += this.rotSpeed * dt;
+
+                if (this.y > h + this.radius + 50 && this.vy > 0) {
+                    this.active = false;
+                }
+            } else {
+                this.half1.x += this.half1.vx * dt;
+                this.half1.y += this.half1.vy * dt;
+                this.half1.vy += GRAVITY * dt;
+                this.half1.rotation += this.half1.rotSpeed * dt;
+
+                this.half2.x += this.half2.vx * dt;
+                this.half2.y += this.half2.vy * dt;
+                this.half2.vy += GRAVITY * dt;
+                this.half2.rotation += this.half2.rotSpeed * dt;
+
+                const half1Gone = (this.half1.y > h + this.radius + 50);
+                const half2Gone = (this.half2.y > h + this.radius + 50);
+                if (half1Gone && half2Gone) {
+                    this.active = false;
+                }
+            }
+        }
+
+        draw(ctx) {
+            if (this.isSliced && this.slicedBy) {
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = this.slicedBy === 'Left' ? '#ff00ff' : '#00ffff';
+            }
+
+            if (!this.isSliced) {
+                const scale = 1 + Math.sin(this.pulse) * 0.1;
+                if (this.type.isBomb) {
+                    this.drawAura(ctx, scale, 'rgba(255, 0, 0, 0.8)', 'rgba(255, 0, 0, 0)');
+                }
+                else if (this.type.special === 'frenzy') {
+                    this.drawAura(ctx, scale, 'rgba(255, 215, 0, 0.8)', 'rgba(255, 215, 0, 0)');
+                }
+                else if (this.type.special === 'freeze') {
+                    this.drawAura(ctx, scale, 'rgba(0, 191, 255, 0.8)', 'rgba(0, 191, 255, 0)');
+                }
+            }
+
+            if (!this.isSliced) {
+                this.drawImage(ctx, this.x, this.y, this.rotation, this.radius, null);
+            } else {
+                this.drawImage(ctx, this.half1.x, this.half1.y, this.half1.rotation, this.radius, 'left');
+                this.drawImage(ctx, this.half2.x, this.half2.y, this.half2.rotation, this.radius, 'right');
+            }
+            ctx.shadowBlur = 0; 
+        }
+
+        drawAura(ctx, scale, colorStart, colorEnd) {
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.beginPath();
+            ctx.arc(0, 0, this.radius * 1.3 * scale, 0, Math.PI * 2);
+            const gradient = ctx.createRadialGradient(0, 0, this.radius * 0.8, 0, 0, this.radius * 1.5);
+            gradient.addColorStop(0, colorStart);
+            gradient.addColorStop(1, colorEnd);
+            ctx.fillStyle = gradient;
+            ctx.fill();
+            ctx.restore();
+        }
+
+        drawImage(ctx, x, y, rotation, radius, clipSide) {
+            ctx.save();
+            ctx.translate(x, y);
+            
+            if (this.type.isBomb || this.type.special) {
+                const scale = 1 + Math.sin(this.pulse) * 0.05;
+                ctx.scale(scale, scale);
+            }
+            
+            ctx.rotate(rotation);
+
+            let drawn = false;
+            if (this.image && this.image.complete && this.image.naturalWidth !== 0) {
+                const size = radius * 2.3;
+                if (clipSide) {
+                    ctx.beginPath();
+                    if (clipSide === 'left') ctx.rect(-size, -size, size, size*2); 
+                    else ctx.rect(0, -size, size, size*2);
+                    ctx.clip();
+                }
+                try {
+                    ctx.drawImage(this.image, -size/2, -size/2, size, size);
+                    drawn = true;
+                } catch (e) { }
+
+                if (clipSide && drawn) {
+                    ctx.beginPath();
+                    ctx.moveTo(0, -size/2.5);
+                    ctx.lineTo(0, size/2.5);
+                    ctx.lineWidth = 3;
+                    ctx.strokeStyle = this.type.innerColor; 
+                    ctx.stroke();
+                }
+            }
+            
+            if (!drawn) {
+                this.drawFallback(ctx, radius, clipSide);
+            }
+
+            ctx.restore();
+        }
+
+        drawFallback(ctx, radius, clipSide) {
+            if (this.type.name === 'watermelon') {
+                this.drawWatermelonFallback(ctx, radius, clipSide); return;
+            }
+            if (this.type.isBomb) {
+                this.drawBombFallback(ctx, radius); return;
+            }
+
+            ctx.beginPath();
+            if (clipSide === 'left') ctx.arc(0, 0, radius, Math.PI/2, Math.PI * 1.5);
+            else if (clipSide === 'right') ctx.arc(0, 0, radius, -Math.PI/2, Math.PI/2);
+            else ctx.arc(0, 0, radius, 0, Math.PI * 2);
+            
+            ctx.fillStyle = this.type.color;
+            if (clipSide) ctx.fillStyle = this.type.innerColor;
+            ctx.fill();
+            
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = this.type.color;
+            ctx.stroke();
+        }
+
+        drawWatermelonFallback(ctx, r, clipSide) {
+             const drawBody = () => {
+                ctx.beginPath();
+                if (clipSide === 'left') ctx.arc(0, 0, r, Math.PI/2, Math.PI * 1.5);
+                else if (clipSide === 'right') ctx.arc(0, 0, r, -Math.PI/2, Math.PI/2);
+                else ctx.arc(0, 0, r, 0, Math.PI * 2);
+                ctx.fillStyle = '#2ecc71'; 
+                ctx.fill();
+            };
+            drawBody();
+            if (!clipSide) {
+                ctx.save(); ctx.clip(); ctx.strokeStyle = '#1e8449'; ctx.lineWidth = r * 0.15; ctx.lineCap = 'round';
+                for (let i = -r; i < r; i += r * 0.5) { ctx.beginPath(); ctx.moveTo(i, -r); ctx.quadraticCurveTo(i + r*0.2, 0, i, r); ctx.stroke(); }
+                ctx.restore();
+            } else {
+                ctx.fillStyle = '#ff6b6b'; ctx.fill(); ctx.lineWidth = 4; ctx.strokeStyle = '#2ecc71'; ctx.stroke();
+                ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(r*0.2, -r*0.2, 3, 0, Math.PI*2); ctx.arc(r*0.2, r*0.2, 3, 0, Math.PI*2); ctx.fill();
+            }
+        }
+
+        drawBombFallback(ctx, r) {
+            ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fillStyle = '#222'; ctx.fill();
+            ctx.beginPath(); ctx.arc(-r*0.3, -r*0.3, r*0.25, 0, Math.PI*2); ctx.fillStyle = 'rgba(255,255,255,0.2)'; ctx.fill();
+            ctx.fillStyle = '#555'; ctx.fillRect(-r*0.2, -r-5, r*0.4, 10);
+            ctx.beginPath(); ctx.arc(0, -r-10, 5, 0, Math.PI*2); ctx.fillStyle = '#ff4444'; ctx.fill();
+        }
+    }
+
+    // 飘分特效
+    class FloatingText {
+        constructor(x, y, text, color) {
+            this.x = x; this.y = y; this.text = text; this.color = color;
+            this.life = 1.0; this.vy = -2; 
+        }
+        update() { this.y += this.vy; this.life -= 0.02; }
+        draw(ctx) {
+            ctx.save(); ctx.globalAlpha = this.life; ctx.fillStyle = this.color;
+            ctx.font = "bold 40px Arial"; ctx.strokeStyle = "white"; ctx.lineWidth = 3;
+            ctx.strokeText(this.text, this.x, this.y); ctx.fillText(this.text, this.x, this.y); ctx.restore();
+        }
+    }
+
+    class Particle {
+        constructor(x, y, color, type = 'normal') {
+            this.x = x; this.y = y; this.color = color;
+            const angle = Math.random() * Math.PI * 2;
+            let speed = Math.random() * 6 + 2;
+            if (type === 'fire') speed *= 1.5;
+            this.vx = Math.cos(angle) * speed;
+            this.vy = Math.sin(angle) * speed;
+            this.life = 1.0;
+            this.decay = Math.random() * 0.03 + 0.02;
+            this.radius = Math.random() * 4 + 2;
+        }
+        update() {
+            // 粒子运动也受 timeScale 影响
+            this.x += this.vx * timeScale;
+            this.y += this.vy * timeScale;
+            this.vy += GRAVITY * timeScale; 
+            this.life -= this.decay * timeScale;
+        }
+        draw(ctx) {
+            ctx.globalAlpha = this.life; ctx.fillStyle = this.color; ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1.0;
+        }
+    }
+
+    // --- 主循环 ---
+
+    function startGameLoop() {
+        scores = { 'Left': 0, 'Right': 0 };
+        uiScoreLeft.innerText = "0"; uiScoreRight.innerText = "0";
+        timeLeft = GAME_DURATION;
+        fruits = []; particles = []; floatingTexts = [];
+        trails['Left'] = []; trails['Right'] = [];
+        isGameRunning = true;
+        
+        shakeDuration = 0; flashDuration = 0;
+        timeScale = 1.0; freezeTimer = 0; frenzyTimer = 0;
+        currentSpawnRate = BASE_SPAWN_RATE;
+
+        centerMsg.style.display = 'none'; finalScoreDisplay.style.display = 'none'; loadingText.style.display = 'none';
+        fxOverlay.style.opacity = 0;
+        
+        const timerInterval = setInterval(() => {
+            if (!isGameRunning) { clearInterval(timerInterval); return; }
+            timeLeft--;
+            uiTime.innerText = timeLeft;
+            if (timeLeft <= 10) uiTime.parentElement.classList.add('urgent');
+            else uiTime.parentElement.classList.remove('urgent');
+
+            if (timeLeft <= 0) {
+                gameOver(); clearInterval(timerInterval);
+            }
+        }, 1000);
+
+        loop();
+    }
+
+    function loop() {
+        if (!isGameRunning) return;
+
+        // --- 更新特效状态 ---
+        
+        if (freezeTimer > 0) {
+            freezeTimer--;
+            timeScale = 0.2; 
+            fxOverlay.style.background = 'radial-gradient(circle, transparent 20%, rgba(0, 191, 255, 0.4) 100%)';
+            fxOverlay.style.opacity = 1;
+        } else {
+            timeScale = 1.0;
+            if (frenzyTimer <= 0) fxOverlay.style.opacity = 0; 
+        }
+
+        if (frenzyTimer > 0) {
+            frenzyTimer--;
+            currentSpawnRate = 6; 
+            if (freezeTimer <= 0) { 
+                fxOverlay.style.background = 'radial-gradient(circle, transparent 40%, rgba(255, 215, 0, 0.4) 100%)';
+                fxOverlay.style.opacity = (Math.floor(frenzyTimer / 5) % 2 === 0) ? 0.8 : 0.4; 
+            }
+        } else {
+            currentSpawnRate = BASE_SPAWN_RATE;
+        }
+
+
+        // --- 渲染逻辑 ---
+
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
+        const w = canvasElement.width;
+        const h = canvasElement.height;
+
+        canvasCtx.clearRect(0, 0, w, h);
+        canvasCtx.save(); 
+
+        if (shakeDuration > 0) {
+            const dx = (Math.random() - 0.5) * 30;
+            const dy = (Math.random() - 0.5) * 30;
+            canvasCtx.translate(dx, dy);
+            shakeDuration--;
+        }
+
+        // 轨迹绘制
+        ['Left', 'Right'].forEach(label => {
+            const hand = handsData[label];
+            const trail = trails[label];
+
+            if (hand.detected) {
+                const cx = hand.x * w;
+                const cy = hand.y * h;
+                trail.push({x: cx, y: cy, life: 1.0});
+                if (trail.length > 12) trail.shift();
+            }
+
+            if (trail.length > 1) {
+                canvasCtx.beginPath();
+                canvasCtx.moveTo(trail[0].x, trail[0].y);
+                for (let i = 1; i < trail.length - 1; i++) {
+                    const xc = (trail[i].x + trail[i+1].x) / 2;
+                    const yc = (trail[i].y + trail[i+1].y) / 2;
+                    canvasCtx.quadraticCurveTo(trail[i].x, trail[i].y, xc, yc);
+                }
+                canvasCtx.lineTo(trail[trail.length-1].x, trail[trail.length-1].y);
+                canvasCtx.lineCap = 'round'; canvasCtx.lineWidth = 8;
+                canvasCtx.strokeStyle = label === 'Left' ? '#ff00ff' : '#00ffff';
+                canvasCtx.shadowBlur = 15; canvasCtx.shadowColor = canvasCtx.strokeStyle;
+                canvasCtx.stroke(); canvasCtx.shadowBlur = 0;
+            }
+
+            for (let i = trail.length - 1; i >= 0; i--) {
+                trail[i].life -= 0.12;
+                if (trail[i].life <= 0) trail.splice(i, 1);
+            }
+        });
+
+        // 生成
+        spawnTimer++;
+        if (spawnTimer > currentSpawnRate) {
+            fruits.push(new Fruit(w, h));
+            spawnTimer = 0;
+        }
+
+        // 更新水果
+        for (let i = fruits.length - 1; i >= 0; i--) {
+            let f = fruits[i];
+            f.update(w, h);
+            f.draw(canvasCtx);
+
+            if (!f.isSliced) {
+                for (const label of ['Left', 'Right']) {
+                    const hand = handsData[label];
+                    if (hand.detected) {
+                        const hx = hand.x * w;
+                        const hy = hand.y * h;
+                        const dist = Math.sqrt((hx - f.x)**2 + (hy - f.y)**2);
+                        
+                        if (dist < f.radius + 30) {
+                            // === 特效逻辑触发 ===
+                            
+                            if (f.type.isBomb) {
+                                scores[label] += f.type.points; 
+                                floatingTexts.push(new FloatingText(f.x, f.y, `${f.type.points}`, '#ff0000')); 
+                                updateScore(label);
+                                createBombExplosion(f.x, f.y);
+                                shakeDuration = 20; flashDuration = 10; 
+                                f.active = false; 
+                                break;
+                            }
+
+                            if (f.type.special === 'frenzy') {
+                                frenzyTimer = 180; 
+                                floatingTexts.push(new FloatingText(f.x, f.y, TEXTS[currentLang].fx_frenzy, '#f1c40f'));
+                                createExplosion(f.x, f.y, '#f1c40f');
+                            }
+
+                            if (f.type.special === 'freeze') {
+                                freezeTimer = 300; 
+                                floatingTexts.push(new FloatingText(f.x, f.y, TEXTS[currentLang].fx_freeze, '#3498db'));
+                                createExplosion(f.x, f.y, '#3498db');
+                            }
+
+                            // === 通用加分与切割 ===
+                            scores[label] += f.type.points;
+                            updateScore(label);
+
+                            const color = label === 'Left' ? '#ff00ff' : '#00ffff';
+                            if (!f.type.special) {
+                                floatingTexts.push(new FloatingText(f.x, f.y, `+${f.type.points}`, color));
+                            }
+
+                            f.isSliced = true;
+                            f.slicedBy = label; 
+                            
+                            f.half1.x = f.x; f.half1.y = f.y; f.half1.rotation = f.rotation;
+                            f.half2.x = f.x; f.half2.y = f.y; f.half2.rotation = f.rotation;
+                            
+                            const angle = Math.atan2(hy - f.y, hx - f.x);
+                            f.half1.vx = f.vx - Math.cos(angle) * 5;
+                            f.half1.vy = f.vy - Math.sin(angle) * 5;
+                            f.half1.rotSpeed = -0.2;
+
+                            f.half2.vx = f.vx + Math.cos(angle) * 5;
+                            f.half2.vy = f.vy + Math.sin(angle) * 5;
+                            f.half2.rotSpeed = 0.2;
+
+                            if (!f.type.special) createExplosion(f.x, f.y, f.type.innerColor);
+                            break; 
+                        }
+                    }
+                }
+            }
+
+            if (!f.active) fruits.splice(i, 1);
+        }
+
+        // 粒子 & 飘字
+        for (let i = particles.length - 1; i >= 0; i--) {
+            let p = particles[i]; p.update(); p.draw(canvasCtx);
+            if (p.life <= 0) particles.splice(i, 1);
+        }
+        for (let i = floatingTexts.length - 1; i >= 0; i--) {
+            let ft = floatingTexts[i]; ft.update(); ft.draw(canvasCtx);
+            if (ft.life <= 0) floatingTexts.splice(i, 1);
+        }
+
+        canvasCtx.restore();
+
+        // 闪光
+        if (flashDuration > 0) {
+            canvasCtx.fillStyle = `rgba(255, 255, 255, ${flashDuration / 10 * 0.8})`; 
+            canvasCtx.fillRect(0, 0, w, h);
+            flashDuration--;
+        }
+
+        // 光标
+        ['Left', 'Right'].forEach(label => {
+            const hand = handsData[label];
+            if (hand.detected) {
+                canvasCtx.beginPath();
+                canvasCtx.arc(hand.x * w, hand.y * h, 8, 0, Math.PI * 2);
+                canvasCtx.fillStyle = 'white'; canvasCtx.fill();
+            }
+        });
+
+        gameLoopId = requestAnimationFrame(loop);
+    }
+
+    function updateScore(label) {
+        if (label === 'Left') uiScoreLeft.innerText = scores[label];
+        else uiScoreRight.innerText = scores[label];
+    }
+
+    function createExplosion(x, y, color) {
+        for (let i = 0; i < 15; i++) {
+            particles.push(new Particle(x, y, color));
+        }
+    }
+
+    function createBombExplosion(x, y) {
+        const colors = ['#ff0000', '#ff4500', '#ff8c00', '#ffff00', '#333333'];
+        for (let i = 0; i < 40; i++) {
+            const col = colors[Math.floor(Math.random() * colors.length)];
+            particles.push(new Particle(x, y, col, 'fire'));
+        }
+    }
+
+    function renderGameOverScreen() {
+        const t = TEXTS[currentLang];
+        finalScoreDisplay.innerHTML = `
+            ${t.time_up}<br>
+            <span style="color:#ff00ff">${t.lbl_left}: ${scores['Left']}</span><br>
+            <span style="color:#00ffff">${t.lbl_right}: ${scores['Right']}</span><br>
+            <span style="font-size:0.8em; color:#ddd">${t.total}: ${scores['Left'] + scores['Right']}</span>
+        `;
+    }
+
+    function gameOver() {
+        isGameRunning = false;
+        cancelAnimationFrame(gameLoopId);
+        centerMsg.style.display = 'block';
+        startBtn.disabled = false;
+        startBtn.innerText = TEXTS[currentLang].btn_retry;
+        loadingText.style.display = 'none';
+        finalScoreDisplay.style.display = 'block';
+        fxOverlay.style.opacity = 0;
+        
+        renderGameOverScreen();
+    }
+</script>
+</body>
+</html>
