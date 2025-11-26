@@ -1,3 +1,5 @@
+**Live Demo:** https://constantine-s-an.github.io/Cutting_Fruit/
+
 Webcam Fruit Slicer - Special Edition 🍎🍌💣
 
 A browser-based Augmented Reality (AR) game where you use your hands to slice flying fruits! Built with MediaPipe for real-time hand tracking, this game supports dual-player competition on a single screen.
